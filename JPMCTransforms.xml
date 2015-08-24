@@ -1,0 +1,52 @@
+<ObjectFactory factoryName="TransformsFactory"
+               factoryClass="com.modinfodesigns.app.ModInfoObjectFactory" >
+               
+  <DataTransform name="NECategoryTransform" class="com.modinfodesigns.property.transform.NestedPropertyTransform"
+                 nestedProperty="NE" >
+    <PropertyTransform class="com.modinfodesigns.property.transform.NameValueObjectTransform"
+                       nameProperty="Category"
+                       valueProperty="Name" />
+  </DataTransform>
+  
+  <!-- DateTransform of DateTime field to DateProperty -->
+  <DataTransform name="DateTimeTransform" class="com.modinfodesigns.property.transform.SequentialPropertyTransform"
+                 inputProperty="DateTime" outputProperty="DateTime" >
+    <PropertyTransform class="com.modinfodesigns.property.transform.time.DatePropertyTransform"
+                       dateFormat="yyyy/MM/dd HH:mm:ss" />
+  </DataTransform>
+  
+  <!-- Transform SearchContent0 to SearchContent0/Subject and SearchContent0/Body -->
+  <DataTransform name="SearchContentTransform_0" class="com.modinfodesigns.property.transform.NestedPropertyTransform"
+                 nestedProperty="SearchContent0" >
+    <PropertyTransform class="com.modinfodesigns.property.transform.NameValueObjectTransform"
+                       nameProperty="Type"
+                       valueProperty="Content" />
+  </DataTransform>
+  
+  <!-- Transform SearchContent1 to SearchContent1/Subject and SearchContent1/Body -->
+  <DataTransform name="SearchContentTransform_1" class="com.modinfodesigns.property.transform.NestedPropertyTransform"
+                 nestedProperty="SearchContent1" >
+    <PropertyTransform class="com.modinfodesigns.property.transform.NameValueObjectTransform"
+                       nameProperty="Type"
+                       valueProperty="Content" />
+  </DataTransform>
+  
+  <!-- Transform Content to Content/Subject and Content/Body -->
+  <DataTransform name="ContentTransform" class="com.modinfodesigns.property.transform.NestedPropertyTransform"
+                 nestedProperty="Content" >
+    <PropertyTransform class="com.modinfodesigns.property.transform.NameValueObjectTransform"
+                       nameProperty="Type"
+                       valueProperty="Paragraphs" />
+  </DataTransform>
+  
+  <DataTransform name="SearchContent0Transform" class="com.modinfodesigns.property.transform.NestedPropertyTransform"
+      nestedProperty="SearchContent0/Body" >
+      <PropertyTransform class="com.modinfodesigns.property.transform.string.TextPropertyTransform" />
+  </DataTransform>
+ 
+ <DataTransform name="SearchContent1Transform" class="com.modinfodesigns.property.transform.NestedPropertyTransform"
+     nestedProperty="SearchContent1/Body" >
+     <PropertyTransform class="com.modinfodesigns.property.transform.string.TextPropertyTransform" />
+ </DataTransform>
+ 
+</ObjectFactory>
