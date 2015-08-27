@@ -8,6 +8,7 @@ import com.lucidworks.apollo.pipeline.StageCallback;
 import com.lucidworks.apollo.pipeline.index.IndexStage;
 import com.lucidworks.apollo.pipeline.stages.Stage;
 
+
 import com.google.inject.Inject;
 import com.lucidworks.apollo.component.ResourceLoader;
 
