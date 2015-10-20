@@ -128,7 +128,7 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
               if (pr instanceof DataObject )
               {
                 PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)pr, parentIDFieldName,
-                                                                fieldMapping.parentIDField, fieldMapping.innerMappings );
+                                                                fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
                 pDoc.setId( pipelineDoc.getId( ) + "#" + Integer.toString( nLinkedDocs++ ) );
                 if (fieldMapping.solrField != null) {
                   pDoc.addField( fieldMapping.solrField, ((DataObject)pr).getName( ) );
@@ -140,7 +140,7 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
           }
           else if (prop instanceof DataObject ) {
             PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)prop, parentIDFieldName,
-                                                            fieldMapping.parentIDField, fieldMapping.innerMappings );
+                                                            fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
             pDoc.setId( pipelineDoc.getId( ) + "#" + Integer.toString( nLinkedDocs++ ) );
             if ( fieldMapping.solrField != null ) {
               pDoc.addField( fieldMapping.solrField, ((DataObject)prop).getName( ) );
@@ -156,14 +156,14 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
               if (pr instanceof DataObject )
               {
                 PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)pr, parentIDFieldName,
-                                                                fieldMapping.parentIDField, fieldMapping.innerMappings );
+                                                                fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
                 pipelineDoc.addField( fieldMapping.solrField, pDoc );
               }
             }
           }
           else if (prop instanceof DataObject ) {
             PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)prop, parentIDFieldName,
-                                                            fieldMapping.parentIDField, fieldMapping.innerMappings );
+                                                            fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
             pipelineDoc.addField( fieldMapping.solrField, pDoc );
           }
           mappedFields.add( fieldMapping.inputPath );
@@ -203,7 +203,7 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
   }
     
   private PipelineDocument createPipelineDocument( PipelineDocument parent, DataObject dobj, String parentIDFieldName,
-                                                  String parentIDField, List<InnerMapping> fieldMappings ) {
+                                                  String parentIDField, List<InnerMapping> fieldMappings, List<String> copyParentFields ) {
     LOG.info( "createPipelineDocument: " + dobj.getValue( IProperty.XML_FORMAT ));
     PipelineDocument pDoc = new PipelineDocument( );
     if (parentIDField != null) {
@@ -235,6 +235,17 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
       IProperty prop = props.next( );
       if (!(prop instanceof IntrinsicPropertyDelegate) && !mappedFields.contains( prop.getName( ))) {
         addDynamicField( pDoc, prop );
+      }
+    }
+      
+    if (copyParentFields != null) {
+      for (String parentField : copyParentFields ) {
+        List<PipelineField> pFields = parent.getFields( parentField );
+        if (pFields != null) {
+          for (PipelineField field : pFields ) {
+            pDoc.addField( new PipelineField( field.getName(), field.getValue() ) ); // copy this
+          }
+        }
       }
     }
       

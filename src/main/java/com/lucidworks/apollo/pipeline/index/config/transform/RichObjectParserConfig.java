@@ -36,6 +36,7 @@ public class RichObjectParserConfig extends StageConfig {
   @SchemaProperty(title="Field Mappings" )
   private final List<FieldMapping> fieldMappings;
     
+
   @JsonCreator
   protected RichObjectParserConfig( @JsonProperty("id") String id,
                                     @JsonProperty("format") Format format,
@@ -98,17 +99,25 @@ public class RichObjectParserConfig extends StageConfig {
     @SchemaProperty(title="Nested Object Fields" )
     public List<InnerMapping> innerMappings;
       
+    @SchemaProperty(title="Copy Parent Fields" )
+    public List<String> copyParentFields;
+      
     @JsonCreator
     public FieldMapping( @JsonProperty("inputPath") String inputPath,
                          @JsonProperty("solrField") String solrField,
                          @JsonProperty("mode") Mode mode,
                          @JsonProperty("parentIDField") String parentIDField,
+                         @JsonProperty("copyParentFields" ) List<String> copyParentFields,
                          @JsonProperty("innerMappings") List<InnerMapping> innerMappings ) {
       this.inputPath = inputPath;
       this.solrField = solrField;
       this.mode = mode;
       this.parentIDField = parentIDField;
       this.innerMappings = innerMappings;
+        
+      if (copyParentFields != null) {
+        this.copyParentFields = new ArrayList<String>( copyParentFields );
+      }
     }
   }
     
