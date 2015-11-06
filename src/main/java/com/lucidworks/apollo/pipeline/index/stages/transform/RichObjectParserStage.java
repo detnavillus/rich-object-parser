@@ -8,7 +8,6 @@ import com.lucidworks.apollo.pipeline.StageCallback;
 import com.lucidworks.apollo.pipeline.index.IndexStage;
 import com.lucidworks.apollo.pipeline.stages.Stage;
 
-
 import com.google.inject.Inject;
 import com.lucidworks.apollo.component.ResourceLoader;
 
@@ -34,10 +33,15 @@ import com.modinfodesigns.property.IntrinsicPropertyDelegate;
 import com.modinfodesigns.property.transform.json.JSONParserTransform;
 import com.modinfodesigns.property.transform.xml.XMLParserTransform;
 
+import com.modinfodesigns.utils.FileMethods;
+
 import java.util.Iterator;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.HashSet;
+
+import java.io.StringWriter;
+import java.io.PrintWriter;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,10 +64,18 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
 
   private static String DATA_TRANSFORM = "DataTransform";
   private static String SOLR_DATE_FORMAT = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+  private static int STRING_MAX = 256;
 
   private ResourceLoader resourceLoader;
     
   private String defaultFloat = "float";  // or "double"
+    
+  private boolean sendAllDocs = true;
+    
+  private static int nReceived = 0;
+  private static int nProcessed = 0;
+  private static int nFailed = 0;
+    
     
   @Inject
   public RichObjectParserStage( ResourceLoader resourceLoader ) {
@@ -74,122 +86,178 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
   public void process( PipelineDocument pipelineDoc, PipelineContext pipelineContext, RichObjectParserConfig config,
                        PipelineCollector<PipelineDocument> collector, StageCallback<PipelineDocument> callback )
                        throws Exception {
-  
-    LOG.info( "RichObjectParser.process( ) ..." );
+    // LOG.debug( "RichObjectParser.process( ) ..." );
+    long startTime = System.currentTimeMillis( );
                            
     String inputField = config.getInputField( );
     Format format = config.getFormat( );
                            
     String parentIDFieldName = config.getParentIDFieldName( );
                            
-    LOG.info( "parsing inputField " + inputField + " format = '" + format.toString( ) + "'" );
+    // LOG.debug( "parsing inputField " + inputField + " format = '" + format.toString( ) + "'" );
                            
-    IDataObjectBuilder dobjBuilder = getDataObjectBuilder( format.toString().toUpperCase( ) );
+    String saveFailedRecordsToPath = config.getFailedRecordsPath( );
+ 
     String dataString = getDataString( inputField, pipelineDoc );
+    pipelineDoc.removeFields( inputField );
                            
-    LOG.info( "Got data string: '" + dataString + "'" );
-    DataObject dataObj = dobjBuilder.createDataObject( dataString );
+    try {
+      IDataObjectBuilder dobjBuilder = getDataObjectBuilder( format.toString().toUpperCase( ) );
+                           
+      // LOG.debug( "Got data string: '" + dataString + "'" );
+      boolean processed = false;
+      if (dataString != null) {
+        DataObject dataObj = dobjBuilder.createDataObject( dataString );
+        // LOG.debug( "Got DataObject: " + dataObj.getValue( IProperty.XML_FORMAT ) );
+        long parseTime = System.currentTimeMillis( );
+        LOG.info( "parsing time was " + (parseTime  - startTime) + " milliseconds" );
+        
+        boolean hasTransformErrors = false;
+        String transformErrors = "";
+        List<IPropertyHolderTransform> pTransforms = getTransforms( config );
+        if (pTransforms != null) {
+          // LOG.debug( "Applying Property Transforms " );
+          for (IPropertyHolderTransform pTransform : pTransforms ) {
+            // LOG.debug( "Applying PropertyTransform: " + pTransform );
+            try {
+              dataObj = (DataObject)pTransform.transformPropertyHolder( dataObj );
+            }
+            catch ( PropertyTransformException pte ) {
+              LOG.error( "Got PropertyTransformException!!! " + pte.getMessage( ) );
+              if (transformErrors == null) {
+                transformErrors = pte.getClass().getName( ) + ": " + pte.getMessage( );;
+              }
+              else {
+                transformErrors = transformErrors + "; " + pte.getClass().getName( ) + ": " + pte.getMessage( );
+              }
+
+              hasTransformErrors = true;
+            }
+          }
+        }
+
+        long transformTime = System.currentTimeMillis( );
+        LOG.info( "Transform time was " + (transformTime - parseTime )+ " milliseconds" );
+          
+        if (hasTransformErrors) {
+          // LOG.debug( "Had Transform Errors");
+          fileFailedDoc( pipelineDoc, dataString, "Had Transform Errors: " + transformErrors, saveFailedRecordsToPath );
+        }
     
-    LOG.info( "Got DataObject: " + dataObj.getValue( IProperty.XML_FORMAT ) );
-    List<IPropertyHolderTransform> pTransforms = getTransforms( config );
-    if (pTransforms != null) {
-      LOG.info( "Applying Property Transforms " );
-      for (IPropertyHolderTransform pTransform : pTransforms ) {
-        LOG.info( "Applying PropertyTransform: " + pTransform );
-        try {
-          dataObj = (DataObject)pTransform.transformPropertyHolder( dataObj );
+        int nLinkedDocs = 0;
+          
+        HashSet<String> mappedFields = new HashSet<String>( );
+          
+        // LOG.debug( "Adding Dynamic Properties ... " );
+        Iterator<IProperty> props = dataObj.getProperties( );
+        while ( props != null && props.hasNext( ) ) {
+          IProperty prop = props.next( );
+          if (!(prop instanceof IntrinsicPropertyDelegate) && !mappedFields.contains( prop.getName( ))) {
+            addDynamicField( pipelineDoc, prop );
+          }
         }
-        catch ( PropertyTransformException pte ) {
-          LOG.info( "Got PropertyTransformException!!! " + pte.getMessage( ) );
-          throw pte;
-        }
-      }
-    }
-    
-    int nLinkedDocs = 0;
-    LOG.info( "Processing fieldMappings ... " );
-    HashSet<String> mappedFields = new HashSet<String>( );
-    List<FieldMapping> fieldMappings = config.getFieldMappings( );
-    for (FieldMapping fieldMapping : fieldMappings ) {
-      IProperty prop = dataObj.getProperty( fieldMapping.inputPath );
-      if (prop != null) {
-        String mode = fieldMapping.mode.toString( );
-        LOG.info( "Mode = '" + mode + "'" );
-        if ( mode.equals( "field" ) ) {
-          addField( pipelineDoc, prop, fieldMapping.solrField );
-          mappedFields.add( fieldMapping.inputPath );
-        }
-        else if (mode.equals( "linked_object" )) {
-          LOG.info( "linked object is a " + prop.getClass().getName() );
-          if (prop instanceof PropertyList ) {
-            Iterator<IProperty> propIt = ((PropertyList)prop).getProperties( );
-            while ( propIt.hasNext( ) ) {
-              IProperty pr = propIt.next( );
-              if (pr instanceof DataObject )
-              {
-                PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)pr, parentIDFieldName,
+          
+        // LOG.debug( "Processing fieldMappings ... " );
+        List<FieldMapping> fieldMappings = config.getFieldMappings( );
+        for (FieldMapping fieldMapping : fieldMappings ) {
+          IProperty prop = dataObj.getProperty( fieldMapping.inputPath );
+          if (prop != null) {
+            String mode = fieldMapping.mode.toString( );
+            // LOG.debug( "Mode = '" + mode + "'" );
+            if ( mode.equals( "field" ) ) {
+              addField( pipelineDoc, prop, fieldMapping.solrField );
+              mappedFields.add( fieldMapping.inputPath );
+            }
+            else if (mode.equals( "linked_object" )) {
+              // LOG.debug( "linked object is a " + prop.getClass().getName() );
+              if (prop instanceof PropertyList ) {
+                Iterator<IProperty> propIt = ((PropertyList)prop).getProperties( );
+                while ( propIt.hasNext( ) ) {
+                  IProperty pr = propIt.next( );
+                  if (pr instanceof DataObject )
+                  {
+                    PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)pr, parentIDFieldName,
+                                                                    fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
+                    pDoc.setId( pipelineDoc.getId( ) + "#" + Integer.toString( nLinkedDocs++ ) );
+                    if (fieldMapping.solrField != null) {
+                      pDoc.addField( fieldMapping.solrField, ((DataObject)pr).getName( ) );
+                    }
+                    collector.write( pDoc );
+                  }
+                }
+                // LOG.debug( "linked_object DONE" );
+              }
+              else if (prop instanceof DataObject ) {
+                PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)prop, parentIDFieldName,
                                                                 fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
                 pDoc.setId( pipelineDoc.getId( ) + "#" + Integer.toString( nLinkedDocs++ ) );
-                if (fieldMapping.solrField != null) {
-                  pDoc.addField( fieldMapping.solrField, ((DataObject)pr).getName( ) );
+                if ( fieldMapping.solrField != null ) {
+                  pDoc.addField( fieldMapping.solrField, ((DataObject)prop).getName( ) );
                 }
                 collector.write( pDoc );
               }
             }
-            LOG.info( "linked_object DONE" );
-          }
-          else if (prop instanceof DataObject ) {
-            PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)prop, parentIDFieldName,
-                                                            fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
-            pDoc.setId( pipelineDoc.getId( ) + "#" + Integer.toString( nLinkedDocs++ ) );
-            if ( fieldMapping.solrField != null ) {
-              pDoc.addField( fieldMapping.solrField, ((DataObject)prop).getName( ) );
-            }
-            collector.write( pDoc );
-          }
-        }
-        else if (mode.equals( "nested_object" )) {
-          if (prop instanceof PropertyList ) {
-            Iterator<IProperty> propIt = ((PropertyList)prop).getProperties( );
-            while ( propIt.hasNext( ) ) {
-              IProperty pr = propIt.next( );
-              if (pr instanceof DataObject )
-              {
-                PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)pr, parentIDFieldName,
+            else if (mode.equals( "nested_object" )) {
+              if (prop instanceof PropertyList ) {
+                Iterator<IProperty> propIt = ((PropertyList)prop).getProperties( );
+                while ( propIt.hasNext( ) ) {
+                  IProperty pr = propIt.next( );
+                  if (pr instanceof DataObject )
+                  {
+                    PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)pr, parentIDFieldName,
+                                                                    fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
+                    pipelineDoc.addField( fieldMapping.solrField, pDoc );
+                  }
+                }
+              }
+              else if (prop instanceof DataObject ) {
+                PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)prop, parentIDFieldName,
                                                                 fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
                 pipelineDoc.addField( fieldMapping.solrField, pDoc );
               }
+              mappedFields.add( fieldMapping.inputPath );
+            }
+            else if (mode.equals("json_string" )) {
+              // LOG.debug( "adding JSON string field: " + fieldMapping.solrField + " = " + prop.getValue( IProperty.JSON_FORMAT ) );
+              pipelineDoc.addField( fieldMapping.solrField, prop.getValue( IProperty.JSON_FORMAT ));
+              mappedFields.add( fieldMapping.inputPath );
             }
           }
-          else if (prop instanceof DataObject ) {
-            PipelineDocument pDoc = createPipelineDocument( pipelineDoc, (DataObject)prop, parentIDFieldName,
-                                                            fieldMapping.parentIDField, fieldMapping.innerMappings, fieldMapping.copyParentFields );
-            pipelineDoc.addField( fieldMapping.solrField, pDoc );
-          }
-          mappedFields.add( fieldMapping.inputPath );
         }
-        else if (mode.equals("json_string" )) {
-          LOG.info( "adding JSON string field: " + fieldMapping.solrField + " = " + prop.getValue( IProperty.JSON_FORMAT ) );
-          pipelineDoc.addField( fieldMapping.solrField, prop.getValue( IProperty.JSON_FORMAT ));
-          mappedFields.add( fieldMapping.inputPath );
-        }
+
+        dataObj.removeProperties( );
+        dataObj = null;
+
+        processed = true;
       }
-    }
-                           
-    LOG.info( "Adding Dynamic Properties ... " );
-    Iterator<IProperty> props = dataObj.getProperties( );
-    while ( props != null && props.hasNext( ) ) {
-      IProperty prop = props.next( );
-      if (!(prop instanceof IntrinsicPropertyDelegate) && !mappedFields.contains( prop.getName( ))) {
-        addDynamicField( pipelineDoc, prop );
+      else {
+        LOG.error( "Data String field was null! Cannot process doc!" );
       }
+                           
+      // LOG.debug( "process  DONE - writing pipelineDoc" );
+      
+      if ( processed || sendAllDocs ) {
+        collector.write( pipelineDoc );
+      }
+        
+      long dur = System.currentTimeMillis( ) - startTime;
+      LOG.info( "RichObjectParser  Processing " + pipelineDoc.getId( ) + ": " + dataString.length() + " took " + dur + " (millis)" );
     }
-                           
-    LOG.info( "process  DONE - writing pipelineDoc" );
-                           
-    collector.write( pipelineDoc );
+    catch ( Throwable e ) {
+      ++nFailed;
+      // LOG.debug( "Failed:\n" + e.getClass( ).getName( ) + ": " + e.getMessage( ) );
+        
+      StringWriter sw = new StringWriter( );
+      PrintWriter pw = new PrintWriter( sw );
+      e.printStackTrace( pw );
+      LOG.debug( sw.toString( ) );
+        
+      fileFailedDoc(  pipelineDoc, dataString, e.getClass().getName( ) + "\n" + sw.toString( ), saveFailedRecordsToPath );
+        
+      if (e instanceof Error) throw (Error)e;
+    }
   }
-    
+
   private IDataObjectBuilder getDataObjectBuilder( String format ) throws Exception {
     if (format.equalsIgnoreCase( "JSON" )) {
       return new JSONParserTransform( );
@@ -198,13 +266,13 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
       return new XMLParserTransform( );
     }
       
-    LOG.info( "ERROR: Could not find parser for " + format );
+    LOG.error( "ERROR: Could not find parser for " + format );
     throw new Exception( "No parser for '" + format + "'" );
   }
     
   private PipelineDocument createPipelineDocument( PipelineDocument parent, DataObject dobj, String parentIDFieldName,
                                                   String parentIDField, List<InnerMapping> fieldMappings, List<String> copyParentFields ) {
-    LOG.info( "createPipelineDocument: " + dobj.getValue( IProperty.XML_FORMAT ));
+    // LOG.debug( "createPipelineDocument: " + dobj.getValue( IProperty.XML_FORMAT ));
     PipelineDocument pDoc = new PipelineDocument( );
     if (parentIDField != null) {
       PipelineField parentField = parent.getFirstField( parentIDField );
@@ -213,11 +281,11 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
         pDoc.addField( parentIDFieldName, parentField.getValue( ).toString( ) );
       }
       else {
-        LOG.info( "Could not add parent field: " + parentIDField );
+        LOG.error( "Could not add parent field: " + parentIDField );
       }
     }
      
-    LOG.info( "Checking mapped Fields ..." );
+    // LOG.debug( "Checking mapped Fields ..." );
     HashSet<String> mappedFields = new HashSet<String>( );
     if (fieldMappings != null) {
       for ( InnerMapping fieldMapping : fieldMappings ) {
@@ -229,7 +297,7 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
       }
     }
     
-    LOG.info( "adding Dynamic Properties" );
+    // LOG.debug( "adding Dynamic Properties" );
     Iterator<IProperty> props = dobj.getProperties( );
     while ( props != null && props.hasNext( ) ) {
       IProperty prop = props.next( );
@@ -249,13 +317,13 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
       }
     }
       
-    LOG.info( "createPipelineDocument DONE!" );
+    // LOG.debug( "createPipelineDocument DONE!" );
     return pDoc;
   }
     
   private void addDynamicField( PipelineDocument pDoc, IProperty prop ) {
     if (prop == null) return;
-    LOG.info( "addDynamicField " + prop.getClass().getName( ) );
+    // LOG.debug( "addDynamicField " + prop.getClass().getName( ) );
     // -------------------------------------------------------------
     // check property type and add dynamic suffixes
     // if instance of PropertyList - make it multiValue in Solr
@@ -266,7 +334,7 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
     if (prop instanceof PropertyList) multiValue = true;
     String propType = getType( prop );
         
-    LOG.info( "propType = '" + propType + "'" );
+    // LOG.debug( "propType = '" + propType + "'" );
     if (propType.equals( "com.modinfodesigns.property.quantity.IntegerProperty")) {
       suffix = (multiValue) ? "_is" : "_i";
     }
@@ -283,16 +351,22 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
       suffix = (multiValue) ? "_t" : "_txt";
     }
     else {
-      suffix = (multiValue) ? "_ss" : "_s";
+        String val = getValue( prop );
+        if ( val.length() < STRING_MAX ) {
+            suffix = (multiValue) ? "_ss" : "_s";
+        }
+        else {
+            suffix = (multiValue) ? "_txt" : "_t";
+        }
     }
       
     String propName = new String( prop.getName( ) + suffix );
-    LOG.info( "adding dynamic property: " + propName );
+    // LOG.debug( "adding dynamic property: " + propName );
     addField( pDoc, prop, propName );
  }
     
   private String getType( IProperty prop ) {
-    LOG.info( "getType of " + prop.getType( ) );
+    // LOG.debug( "getType of " + prop.getType( ) );
     if (prop instanceof PropertyList) {
       // first property in list defines it - could check if heterogeneous in which case type is String
       Iterator<IProperty> propIt = ((PropertyList)prop).getProperties( );
@@ -328,19 +402,19 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
       Iterator<IProperty> props = pList.getProperties( );
       while (props != null && props.hasNext() ) {
         IProperty pr = props.next( );
-        LOG.info( "List addField( " + fieldName + ", '" + pr.getValue( ) + "' )" );
+        // LOG.debug( "List addField( " + fieldName + ", '" + pr.getValue( ) + "' )" );
         
         pDoc.addField( fieldName, getValue( pr ) );
       }
     }
     else {
-      LOG.info( "Single addField( " + fieldName + ", '" + prop.getValue( ) + " type: " + prop.getType( ) + "' )" );
+      // LOG.debug( "Single addField( " + fieldName + ", '" + prop.getValue( ) + " type: " + prop.getType( ) + "' )" );
       pDoc.addField( fieldName, getValue( prop ) );
     }
   }
     
   private String getDataString( String dataField, PipelineDocument pipelineDoc ) {
-    LOG.info( "getDataString from " + dataField );
+    // LOG.debug( "getDataString from " + dataField );
     PipelineField field = pipelineDoc.getFirstField( dataField );
     return (field != null && field.getValue() != null ) ? field.getValue( ).toString( ) : null;
   }
@@ -364,15 +438,15 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
 
   private void initObjectFactory( RichObjectParserConfig config ) {
       
-    LOG.info( "initObjectFactory" );
+    // LOG.debug( "initObjectFactory" );
     String configFile = config.getDataObjectTransform( );
     if (configFile == null)
     {
-      LOG.info( "Config file is NULL!" );
+      LOG.error( "Config file is NULL!" );
       return;
     }
      
-    LOG.info( "initializing object factory: " + configFile );
+    // LOG.debug( "initializing object factory: " + configFile );
     ApplicationManager appMan = ApplicationManager.getInstance( );
     if (appMan.getObjectFactory( configFile ) == null) {
       synchronized( this ) {
@@ -383,7 +457,7 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
         if (configFile.startsWith( "/" )) {
           // read file with FileMethods
           String configXML = FileMethods.readFile( configFile );
-          LOG.info( "Initializing ModInfoObjectFactory with " + configXML );
+          // LOG.debug( "Initializing ModInfoObjectFactory with " + configXML );
           objectFac = new ModInfoObjectFactory( );
           objectFac.initialize( configXML );
         }
@@ -396,6 +470,27 @@ public class RichObjectParserStage extends IndexStage<RichObjectParserConfig> {
       }
     }
   }
+    
+  private void fileFailedDoc( PipelineDocument pipelineDoc, String dataString, String failedMessage, String saveFailedRecordsToPath ) {
+    // LOG.debug( "fileFailedDoc: " + failedMessage );
+    // save dataString to a file!
+    if (saveFailedRecordsToPath != null ) {
+      // get the file name from the solr doc ...
+      PipelineField pField = pipelineDoc.getFirstField( "id" );
+      if (pField != null && pField.getValue() != null) {
+        String id = pField.getValue( ).toString( );
+        String fileName =  ( id.indexOf( "/" ) < 0 ) ? id : id.substring( id.lastIndexOf( "/" ) + 1 );
+                
+        String errorList = saveFailedRecordsToPath + "/errors.txt";
+        String errorLine = Integer.toString( nFailed ) + " of " + Integer.toString( nReceived ) + ") " + id + ": " + failedMessage;
+        FileMethods.addToFile( errorList, errorLine );
+                
+        fileName = saveFailedRecordsToPath + "/" + fileName;
+        FileMethods.writeFile( fileName, dataString );
+      }
+    }
+  }
+
 
     
   @Override

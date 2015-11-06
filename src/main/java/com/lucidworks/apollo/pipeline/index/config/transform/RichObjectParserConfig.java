@@ -33,16 +33,19 @@ public class RichObjectParserConfig extends StageConfig {
   @SchemaProperty(title="Data Object Transform Config")
   private final String dataObjectTransform;
     
+  @SchemaProperty( title="Failed Records Path")
+  private final String failedRecordsPath;
+    
   @SchemaProperty(title="Field Mappings" )
   private final List<FieldMapping> fieldMappings;
     
-
   @JsonCreator
   protected RichObjectParserConfig( @JsonProperty("id") String id,
                                     @JsonProperty("format") Format format,
                                     @JsonProperty("inputField") String inputField,
                                     @JsonProperty("parentIDFieldName") String parentIDFieldName,
                                     @JsonProperty("dataObjectTransform") String dataObjectTransform,
+                                    @JsonProperty("failedRecordsPath") String failedRecordsPath,
                                     @JsonProperty("fieldMappings") List<FieldMapping> fieldMappings ) {
     super(id);
     this.format = format;
@@ -55,6 +58,8 @@ public class RichObjectParserConfig extends StageConfig {
       
     this.parentIDFieldName = parentIDFieldName;
     this.dataObjectTransform = dataObjectTransform;
+      
+    this.failedRecordsPath = failedRecordsPath;
   }
 
   @JsonProperty( "format" )
@@ -80,6 +85,11 @@ public class RichObjectParserConfig extends StageConfig {
   @JsonProperty( "dataObjectTransform" )
   public String getDataObjectTransform(  ) {
     return this.dataObjectTransform;
+  }
+    
+  @JsonProperty( "failedRecordsPath" )
+  public String getFailedRecordsPath( ) {
+    return this.failedRecordsPath;
   }
 
   public static class FieldMapping {
